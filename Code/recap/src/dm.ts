@@ -1,9 +1,7 @@
-import { assign, createActor, raise, setup } from "xstate";
+import { assign, createActor, raise, setup, fromPromise} from "xstate";
 import { speechstate } from "speechstate";
 import type { Settings } from "speechstate";
-
-import type { DMEvents, DMContext } from "./types";
-
+import type { DMEvents, DMContext, Message} from "./types";
 import { KEY } from "./azure";
 
 const azureCredentials = {
@@ -31,92 +29,144 @@ const dmMachine = setup({
     sst_prepare: ({ context }) => context.spstRef.send({ type: "PREPARE" }),
     sst_listen: ({ context }) => context.spstRef.send({ type: "LISTEN" }),
   },
+  actors:{
+    getModels: fromPromise<any,null>(() => 
+      fetch("http://localhost:11434/api/tags").then((response) =>
+        response.json()
+      )
+    ),
+    modelReply : fromPromise<any, Message[]> (({input}) => {
+      const body = {
+        model: "llama3:latest",
+        stream: false,
+        messages: input,
+      };
+      return fetch("http://localhost:11434/api/chat", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }).then((response) => response.json());
+    }
+    ) 
+  },
 }).createMachine({
   id: "DM",
   context: ({ spawn }) => ({
     spstRef: spawn(speechstate, { input: settings }),
     informationState: { latestMove: "ping" },
     lastResult: "",
+    messages:[],
+    ollamaModels:[],
   }),
   initial: "Prepare",
   states: {
     Prepare: {
       entry: "sst_prepare",
       on: {
-        ASRTTS_READY: "Main",
+        ASRTTS_READY: "GetModels",
+      },
+    },
+    GetModels:{
+      invoke:{
+        src:"getModels",
+        input: null,
+        onDone:{
+          target: "Main",
+          actions: assign(({ event }) => {
+              return {
+              ollamaModels:event.output.models.map((x:any) => x.name)
+            }
+          })
+        }
       },
     },
     Main: {
-      type: "parallel",
-      states: {
-        Interpret: {
-          initial: "Idle",
-          states: {
-            Idle: {
-              on: { SPEAK_COMPLETE: "Recognising" },
-            },
-            Recognising: {
-              entry: "sst_listen",
-              on: {
-                LISTEN_COMPLETE: {
-                  target: "Idle",
-                  actions: raise(({ context }) => ({
-                    type: "SAYS",
-                    value: context.lastResult,
-                  })),
-                },
-                RECOGNISED: {
-                  actions: assign(({ event }) => ({
-                    lastResult: event.value[0].utterance,
-                  })),
-                },
+      initial: "Prompt",
+      states:{
+        Prompt: { 
+          entry: assign(({ context }) => ({
+            messages: [
+              {
+                role: "assistant",
+                content: `Hello! The models are ${context.ollamaModels?.join(" ")}`
               },
-            },
-          },
+              ...context.messages
+            ]
+          })),
+          on:{
+            CLICK : "SpeakPrompt"
+          }
         },
-        Generate: {
-          initial: "Idle",
-          states: {
-            Speaking: {
-              entry: ({ context, event }) =>
-                context.spstRef.send({
-                  type: "SPEAK",
-                  value: { utterance: (event as any).value },
-                }),
-              on: { SPEAK_COMPLETE: "Idle" },
-            },
-            Idle: {
-              on: { NEXT_MOVE: "Speaking" },
-            },
+      
+      SpeakPrompt: {
+        entry: ({ context }) =>
+          context.spstRef.send({
+            type: "SPEAK",
+            value: { utterance: context.messages[0].content },
+          }),
+        on: { SPEAK_COMPLETE: "Ask" }
+      },
+
+      Ask: {
+        entry: "sst_listen",
+        on: {
+          LISTEN_COMPLETE:{
+            target:"ChatCompletion"
           },
-        },
-        Process: {
-          initial: "Select",
-          states: {
-            Select: {
-              always: {
-                guard: ({ context }) =>
-                  context.informationState.latestMove !== "",
-                actions: raise(({ context }) => ({
-                  type: "NEXT_MOVE",
-                  value: context.informationState.latestMove,
-                })),
-                target: "Update",
-              },
-            },
-            Update: {
-              entry: assign({ informationState: { latestMove: "" } }),
-              on: {
-                SAYS: {
-                  target: "Select",
-                  actions: assign(({ event }) => ({
-                    informationState: { latestMove: event.value },
-                  })),
-                },
-              },
-            },
+          RECOGNISED:{
+            actions: assign(({ event, context }) => ({
+              messages: [{
+                role: "user", 
+                content: event.value[0].utterance
+              }, 
+              ...context.messages],
+            })),
           },
+          ASR_NOINPUT: {
+            target:"Reprompt",
+          }
+          
         },
+      },
+
+      ChatCompletion:{
+        invoke:{
+          src: "modelReply",
+          input: (context) => context.context.messages,
+          onDone:{
+            target: "Speaking",
+            actions: assign(({event, context}) => {
+              console.log("Model reply event:", event.output);
+              return {
+                messages:[
+                  {
+                    role:"assistant",
+                    content: event.output.message.content
+                  },
+                  ...context.messages]
+              }
+            })
+          }
+        }
+      },
+
+      Speaking: {
+        entry: ({ context }) =>
+            context.spstRef.send({
+              type: "SPEAK",
+              value: { utterance: context.messages[0].content },
+            }),
+      on: {SPEAK_COMPLETE: "Ask"}
+      },
+
+      Reprompt: {
+        entry: ({ context }) =>
+          context.spstRef.send({
+            type: "SPEAK",
+            value: { utterance: "I can't hear you." },
+          }),
+        on: { SPEAK_COMPLETE: "Ask" }, 
+      },
+
       },
     },
   },
