@@ -40,6 +40,7 @@ const dmMachine = setup({
         model: "llama3:latest",
         stream: false,
         messages: input,
+        temperature : 0.8,
       };
       return fetch("http://localhost:11434/api/chat", {
         method: "POST",
@@ -86,7 +87,7 @@ const dmMachine = setup({
           entry: assign(({ context }) => ({
             messages: [
               {
-                role: "assistant",
+                role: "system",
                 content: `Hello! The models are ${context.ollamaModels?.join(" ")}`
               },
               ...context.messages
@@ -114,17 +115,20 @@ const dmMachine = setup({
           },
           RECOGNISED:{
             actions: assign(({ event, context }) => ({
-              messages: [{
-                role: "user", 
-                content: event.value[0].utterance
-              }, 
-              ...context.messages],
+              ...context.messages,
+              messages: [{role: "user", content: event.value[0].utterance}, 
+              ],
             })),
           },
-          ASR_NOINPUT: {
-            target:"Reprompt",
-          }
-          
+          ASR_NOINPUT:{
+            target: "ChatCompletion",
+            actions: assign(({context}) => ({
+              messages:[
+                ...context.messages,
+                {role:"user",content: ""}
+              ]
+            }))
+          },
         },
       },
 
@@ -135,14 +139,12 @@ const dmMachine = setup({
           onDone:{
             target: "Speaking",
             actions: assign(({event, context}) => {
-              console.log("Model reply event:", event.output);
+              console.log("Raw output:", event.output);
               return {
                 messages:[
-                  {
-                    role:"assistant",
-                    content: event.output.message.content
-                  },
-                  ...context.messages]
+                  ...context.messages,
+                  {role:"assistant",content: event.output.message.content},
+                ]
               }
             })
           }
@@ -150,21 +152,17 @@ const dmMachine = setup({
       },
 
       Speaking: {
-        entry: ({ context }) =>
+        entry: ({ context }) => {
+          const msgs = context.messages;
+          const lastMsg = msgs[msgs.length - 1]; 
+          if (lastMsg && lastMsg.role === "assistant") {
             context.spstRef.send({
               type: "SPEAK",
-              value: { utterance: context.messages[0].content },
-            }),
-      on: {SPEAK_COMPLETE: "Ask"}
-      },
-
-      Reprompt: {
-        entry: ({ context }) =>
-          context.spstRef.send({
-            type: "SPEAK",
-            value: { utterance: "I can't hear you." },
-          }),
-        on: { SPEAK_COMPLETE: "Ask" }, 
+              value: { utterance: lastMsg.content },
+            });
+          }
+        },
+        on: { SPEAK_COMPLETE: "Ask" },
       },
 
       },
