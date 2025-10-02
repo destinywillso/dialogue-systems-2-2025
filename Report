@@ -1,10 +1,10 @@
 /* lab2 Report
-For part one, the main difficulty was that the system randomly generated some numbers 
+  For part one, the main difficulty was that the system randomly generated some numbers 
 and letters because I hadn't followed the correct sequence of messages. I fixed this 
 problem by appending the new message to the end of the array instead of the head. 
 Meanwhile, I changed the rule for Speaking, making it speak the last message in the array.
 
-For part two, I used to set up an independent state for no_input. In the end, I changed 
+  For part two, I used to set up an independent state for no_input. In the end, I changed 
 it to be part of Ask, using a blank string as the user's input and passing this blank 
 content to the LLM to generate a response. Fortunately, it works.
 */
