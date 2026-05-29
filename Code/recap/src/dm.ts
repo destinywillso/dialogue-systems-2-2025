@@ -19,6 +19,8 @@ const settings: Settings = {
   ttsDefaultVoice: "en-US-DavisNeural",
 };
 
+const OLLAMA_MODEL = "llama3:latest";
+
 const dmMachine = setup({
   types: {
     /** you might need to extend these */
@@ -37,7 +39,7 @@ const dmMachine = setup({
     ),
     modelReply : fromPromise<any, Message[]> (({input}) => {
       const body = {
-        model: "llama3:latest",
+        model: OLLAMA_MODEL,
         stream: false,
         messages: input,
         temperature : 0.8,
@@ -88,7 +90,7 @@ const dmMachine = setup({
             messages: [
               {
                 role: "system",
-                content: `Hello! The models are ${context.ollamaModels?.join(" ")}`
+                content: `Hello! The model is ${OLLAMA_MODEL}`
               },
               ...context.messages
             ]
